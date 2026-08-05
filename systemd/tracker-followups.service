@@ -1,0 +1,7 @@
+[Unit]
+Description=Job tracker follow-up check
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/projects/Tracker
+ExecStart=%h/Documents/projects/Tracker/.venv/bin/python %h/Documents/projects/Tracker/check_followups.py
