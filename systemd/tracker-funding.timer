@@ -1,0 +1,13 @@
+[Unit]
+Description=Twice-daily funding-signal check
+
+[Timer]
+# Twice a day is plenty: the signal being chased is a hiring window that opens
+# two to eight weeks after a raise, so minutes do not matter. Runs before the
+# 09:00 digest so a new raise appears in the same morning's read.
+OnCalendar=*-*-* 08:30:00
+OnCalendar=*-*-* 20:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
