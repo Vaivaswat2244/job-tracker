@@ -1,0 +1,6 @@
+.venv/
+.env
+tracker.db
+tracker.xlsx
+__pycache__/
+*.pyc
