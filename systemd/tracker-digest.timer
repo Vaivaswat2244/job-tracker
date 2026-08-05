@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily job pipeline digest at 09:00
+
+[Timer]
+# Fires before the 09:30 follow-up check so the digest's stale-feed alerts are
+# read before acting on a list those feeds may have quietly stopped filling.
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
