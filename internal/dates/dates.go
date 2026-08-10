@@ -1,7 +1,12 @@
 // Package dates holds the follow-up ladder's calendar arithmetic.
 package dates
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
 const FollowupBusinessDays = 5
 
@@ -15,6 +20,34 @@ func AddBusinessDays(start time.Time, n int) time.Time {
 		}
 	}
 	return d
+}
+
+// ParseSince turns a lookback like "7d", "48h" or an absolute "2026-08-01"
+// into a cutoff instant. Relative forms are what anyone types at a prompt;
+// the absolute form is what you reach for when chasing one specific day.
+func ParseSince(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	if unit := value[len(value)-1]; unit == 'd' || unit == 'h' || unit == 'w' {
+		n, err := strconv.Atoi(value[:len(value)-1])
+		if err != nil || n < 0 {
+			return time.Time{}, fmt.Errorf("bad duration %q: want a number then d, h or w", value)
+		}
+		switch unit {
+		case 'h':
+			return now.Add(-time.Duration(n) * time.Hour), nil
+		case 'd':
+			return now.AddDate(0, 0, -n), nil
+		default:
+			return now.AddDate(0, 0, -7*n), nil
+		}
+	}
+	if d := ParseDay(value); !d.IsZero() {
+		return d, nil
+	}
+	return time.Time{}, fmt.Errorf("bad --since %q: want 7d, 48h, 2w or 2026-08-01", value)
 }
 
 // dayLayouts mirrors what datetime.fromisoformat accepts for the values this
