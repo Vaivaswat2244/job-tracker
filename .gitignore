@@ -4,3 +4,10 @@ tracker.db
 tracker.xlsx
 __pycache__/
 *.pyc
+bin/
+
+# Service account keys. The documented location is outside the repo, but a key
+# committed by accident is a key that has to be revoked.
+*service-account*.json
+*google-sheet*.json
+credentials*.json

@@ -24,6 +24,8 @@ const usageText = `tracker — job application pipeline
   list                       active applications, sorted by followup_due
   jobs                       browse every role poll has ingested
   export                     write tracker.xlsx
+  sheet push                 push Pipeline + Applications to the Google Sheet
+  sheet setup                how to connect a Google Sheet
 
   watchlist add <careers_url>  detect the ATS behind a careers page and add it
   watchlist list               watchlist with poll state
@@ -60,6 +62,8 @@ func Main(argv []string) int {
 		return withDB(rest, jobsCmd)
 	case "export":
 		return withDB(rest, exportCmd)
+	case "sheet":
+		return withDB(rest, sheetCmd)
 	case "watchlist":
 		return withDB(rest, watchlistCmd)
 	case "poll":
