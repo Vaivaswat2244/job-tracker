@@ -12,25 +12,28 @@ Written in Go: one static binary, no venv, no interpreter on the timer path.
 | 2 | ATS watchlist polling (Tier 2 ingest) | built |
 | 3 | funding-signal ingest (Tier 3) | built |
 | 4 | semantic scoring, contact discovery | not built |
+| — | Gmail ingest of application state | built |
 
 ## Setup
 
 ```bash
 make build                    # -> bin/tracker
 cp .env.example .env          # optional, for phone push
-make install-timers           # builds, then installs all five timers
+make install-timers           # builds, then installs all six timers
 make test                     # go test ./...
 ```
 
-Five user timers are installed: hourly `poll`, twice-daily `funding poll`, the 09:00
-`digest`, the 09:30 follow-up check, and the 09:05 Google Sheet push. Each fires under
+Six user timers are installed: hourly `poll`, twice-daily `funding poll`, the 09:00
+`digest`, the 09:30 follow-up check, the 09:05 Google Sheet push, and the two-hourly
+Gmail read. Each fires under
 `Persistent=true`, so a run missed while the laptop was asleep happens on wake rather than
 being skipped.
 
 The hourly poll timer is a *check*, not a poll: a company is only fetched once its cadence
-has elapsed — 3h at `high` priority, 6h at `normal` — so 22 `normal` companies are each
-polled about four times a day. `tracker-sheet` fails with setup instructions until
-`GOOGLE_SHEET_ID` is configured; that is expected until you finish the Sheet setup below.
+has elapsed — 3h at `high` priority, 6h at `normal` — so a `normal` company is polled about
+four times a day. `tracker-sheet` and `tracker-mail` print setup instructions and exit 0
+until they are configured: never set up is a choice, and a daily timer should not turn red
+over it. Half set up, or set up wrongly, exits 1.
 
 Optional phone push via ntfy. Public topics are readable by anyone who knows the name,
 so generate an unguessable one and keep it out of git (`.env` is already ignored):
@@ -53,6 +56,8 @@ directory; `bin/tracker` directly is the same thing once built.
 ./tracker.sh jobs                       # everything poll ingested (see below)
 ./tracker.sh export                     # tracker.xlsx
 ./tracker.sh sheet push                 # -> the shared Google Sheet
+./tracker.sh mail poll                  # read Gmail for confirmations/rejections
+./tracker.sh mail list                  # mail the ingest could not place
 ```
 
 `add-job` flags: `--company`, `--title`, `--source`, `--notes`, `--no-fetch`.
@@ -261,6 +266,54 @@ The push clears each tab before writing, so a role that leaves the pipeline does
 as a stale row. Column widths and the filter are applied only when a tab is first created —
 re-imposing them daily would stamp on anything a reader adjusted.
 
+## Gmail ingest
+
+`mail poll` reads recent mail and keeps application state current without you
+typing it. It creates an application when the confirmation arrives, closes one when
+the rejection does, and — the part nothing else in the codebase did — writes
+`outreach.replied_at` so a human reply stops the follow-up ladder.
+
+**Read-only.** The scope requested is `gmail.readonly`. Nothing here sends, labels,
+archives or deletes, and the token itself cannot: the guarantee is enforced at
+Google's end, not just by this code. This is the same stance as INV-2 — the safest
+way never to send mail the user did not read is to have no send capability.
+
+**It queues rather than guesses.** A message that cannot be tied to exactly one
+application is recorded with a reason and waits for you:
+
+```bash
+tracker mail list                        # what could not be placed, and why
+tracker mail apply <gmail_id> <job_id>   # "this one" -> does what the ingest would have
+tracker mail dismiss <gmail_id>          # not about an application
+```
+
+A wrongly auto-rejected application is worse than an unreviewed one: you stop
+trusting the status column and start checking every row by hand, which is the job
+the tool exists to remove. So `unfortunately` is deliberately *not* a rejection
+phrase — it appears in scheduling mail as often as in declines.
+
+Most application mail comes from `greenhouse.io` or `lever.co` on behalf of the
+employer, so the sender domain identifies the ATS and says nothing about who is
+hiring. For those the company is read out of the subject line, and an exact name
+match beats a prefix one so "Stripe" does not collide with "Stripe Capital".
+
+Setup (`tracker mail setup` prints it):
+
+1. Reuse the Cloud project from the sheet setup; enable the **Gmail API**.
+2. OAuth consent screen → External → add yourself as a test user → **Publish**.
+   Left in "Testing", the refresh token expires after 7 days and the timer breaks
+   every week.
+3. Credentials → OAuth client ID → **Desktop app** → download the JSON.
+4. `GMAIL_CLIENT_SECRET=/path/to/gmail-client.json` in `.env`, then:
+
+```bash
+tracker mail auth    # one browser consent, caches a refresh token at 0600
+tracker mail poll
+```
+
+The `tracker-mail` timer runs every two hours at :15; the 08:15 run lands before
+the 09:30 follow-up check so overnight replies stop the ladder in time.
+
 ## Invariants this code enforces
 
 **INV-1 — never silently lose an opportunity.** Ingest is append-only. `add-job` always
@@ -302,6 +355,7 @@ internal/followup/       the escalation ladder, run by the 09:30 timer
 internal/fetch/          tolerant JD fetch, company/domain inference
 internal/export/         row builders + excelize -> tracker.xlsx, status colours
 internal/gsheet/         Pipeline + Applications -> a shared Google Sheet
+internal/gmail/          read-only mail ingest: classify, match, review queue
 internal/notify/         notify-send + optional ntfy
 internal/dates/          business-day arithmetic
 internal/httpx/          retries, backoff, conditional GET, per-host politeness, robots

@@ -26,6 +26,9 @@ const usageText = `tracker — job application pipeline
   export                     write tracker.xlsx
   sheet push                 push Pipeline + Applications to the Google Sheet
   sheet setup                how to connect a Google Sheet
+  mail poll                  read Gmail for application confirmations/rejections
+  mail list                  messages the ingest could not place, awaiting a call
+  mail auth|setup            connect Gmail, read-only
 
   watchlist add <careers_url>  detect the ATS behind a careers page and add it
   watchlist list               watchlist with poll state
@@ -64,6 +67,8 @@ func Main(argv []string) int {
 		return withDB(rest, exportCmd)
 	case "sheet":
 		return withDB(rest, sheetCmd)
+	case "mail":
+		return withDB(rest, mailCmd)
 	case "watchlist":
 		return withDB(rest, watchlistCmd)
 	case "poll":

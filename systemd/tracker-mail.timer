@@ -1,0 +1,13 @@
+[Unit]
+Description=Read Gmail for application state every two hours
+
+[Timer]
+# Every two hours at :15. The 08:15 run is the one that matters: it lands
+# before the 09:30 follow-up check, so a reply that arrived overnight stops the
+# ladder before it nags someone who already answered.
+OnCalendar=*-*-* 00/2:15:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

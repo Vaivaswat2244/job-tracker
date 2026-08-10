@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the user timers. No root, no system units.
 set -euo pipefail
-UNITS=(tracker-followups tracker-poll tracker-funding tracker-digest tracker-sheet)
+UNITS=(tracker-followups tracker-poll tracker-funding tracker-digest tracker-sheet tracker-mail)
 
 mkdir -p "$HOME/.config/systemd/user"
 for unit in "${UNITS[@]}"; do

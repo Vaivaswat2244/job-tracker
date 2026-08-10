@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS outreach (
     body TEXT
 );
 
+-- One row per Gmail message the ingest has looked at, keyed on Gmail's own id
+-- so a re-poll is idempotent and a message is never acted on twice.
+--
+-- needs_review is the whole point of the table: when the message cannot be tied
+-- to exactly one application with confidence, it is recorded and queued rather
+-- than guessed at. A wrong auto-transition is worse than a queue, because the
+-- user stops trusting the status column.
+CREATE TABLE IF NOT EXISTS mail_messages (
+    gmail_id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    from_addr TEXT,
+    from_domain TEXT,
+    subject TEXT,
+    received_at TEXT,
+    kind TEXT NOT NULL,              -- confirmation | rejection | reply | other
+    company_id INTEGER REFERENCES companies(id),
+    job_id INTEGER REFERENCES jobs(id),
+    application_id INTEGER REFERENCES applications(id),
+    action TEXT NOT NULL,            -- applied | rejected | replied | queued | none
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    company_guess TEXT,              -- what the subject line claimed, pre-match
+    decided_at TEXT,
+    seen_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS excluded_log (
     id INTEGER PRIMARY KEY,
     raw_payload TEXT,
@@ -241,4 +267,6 @@ var postIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_jobs_canonical ON jobs(canonical_id)",
 	"CREATE INDEX IF NOT EXISTS idx_jobs_dedupe ON jobs(dedupe_key)",
 	"CREATE INDEX IF NOT EXISTS idx_companies_domain ON companies(lower(domain))",
+	"CREATE INDEX IF NOT EXISTS idx_mail_review ON mail_messages(needs_review, received_at)",
+	"CREATE INDEX IF NOT EXISTS idx_mail_thread ON mail_messages(thread_id)",
 }
