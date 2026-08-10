@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly watchlist poll (per-company cadence decides what actually runs)
+
+[Timer]
+# Hourly wake-up is cheap: `poll` skips any company still inside its cadence
+# (3h for high priority, 6h for normal), so this fires far fewer HTTP requests
+# than it looks like. Persistent catches up after the laptop was asleep.
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

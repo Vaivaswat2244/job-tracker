@@ -1,0 +1,9 @@
+[Unit]
+Description=Push the job pipeline to the shared Google Sheet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/projects/Tracker
+ExecStart=%h/Documents/projects/Tracker/bin/tracker sheet push

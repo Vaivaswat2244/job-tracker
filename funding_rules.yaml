@@ -1,0 +1,58 @@
+# Deterministic extraction rules. Editable without touching the parser.
+#
+# All patterns are case-insensitive Python regex, matched against the headline.
+# Headlines are the only text this pipeline stores, so they are the only text
+# extraction runs on.
+
+# An item must match one of these to be treated as a funding announcement.
+triggers:
+  - '\b(?:raise[sd]?|raising)\b'
+  - '\b(?:bags?|bagged|secures?|secured|nets?|netted|garners?|garnered)\b.{0,40}\b(?:funding|round|investment|mn|bn|cr|crore|million)\b'
+  - '\b(?:closes?|closed|wraps? up)\b.{0,30}\b(?:round|funding)\b'
+  - '\b(?:mops? up|picks? up|lands?|landed|scoops? up)\b.{0,30}\b(?:funding|mn|bn|cr|crore|million)\b'
+  - '\b(?:pre-)?series\s+[a-j]\b'
+  - '\b(?:seed|pre-seed)\s+(?:round|funding)\b'
+  - '\bfunding\s+round\b'
+
+# Headlines that trip a trigger but are not a company raising money.
+anti_triggers:
+  - '\b(?:vc|venture|pe)\s+(?:firm|fund)\b.{0,30}\b(?:raise[sd]?|closes?)\b.{0,20}\bfund\b'
+  - '\braises?\s+(?:concerns?|questions?|doubts?|alarm|the\s+bar)\b'
+  - '\b(?:fund|vehicle)\s+(?:i|ii|iii|iv|v)\b'
+  - '\bmaiden\s+fund\b'
+
+# Near-miss vocabulary: an item that mentions money but matched no trigger gets
+# logged to excluded_log for review rather than vanishing.
+near_miss:
+  - '[$₹]'
+  - '\b(?:crore|cr|lakh|million|mn|billion|bn)\b'
+  - '\b(?:funding|investor|investment|valuation)\b'
+
+# Longest-first: 'pre-series a' must beat 'series a'.
+stages:
+  - {pattern: '\bpre-seed\b|\bpre\s+seed\b', stage: 'pre-seed'}
+  - {pattern: '\bpre-series\s+a\b', stage: 'seed'}        # conventionally between seed and A
+  # \d? catches the "Series A1" / "Series B2" extension rounds.
+  - {pattern: '\bseries\s+a\d?\b', stage: 'A'}
+  - {pattern: '\bseries\s+b\d?\b', stage: 'B'}
+  - {pattern: '\bseries\s+[c-j]\d?\b', stage: 'C+'}
+  - {pattern: '\b(?:venture\s+debt|debt\s+(?:funding|round|financing)|ncds?|non-convertible)\b', stage: 'debt'}
+  - {pattern: '\bseed\b', stage: 'seed'}
+  - {pattern: '\bgrowth\s+round\b|\blate-stage\b', stage: 'C+'}
+
+# Leading noise stripped off the front of a headline before the company name.
+name_prefixes:
+  - '^\[[^\]]*\]\s*'                       # [Update], [Exclusive]
+  - '^(?:exclusive|breaking|update)\s*[:|-]\s*'
+  - '^[A-Za-z]+-based\s+'                  # Bengaluru-based
+  - '^(?:ev|d2c|b2b|b2c|saas|ai|fintech|healthtech|edtech|agritech|insurtech|deeptech|spacetech|cleantech|quick\s+commerce)\s+'
+  - '^(?:startup|firm|company|platform|brand|unicorn|soonicorn|major|player|maker|app)\s+'
+  # Generic sector descriptor before the name: "Personal assistance startup Hulp",
+  # "C2C marketplace Vingo", "Deep-tech energy startup Adiabatic Technologies".
+  # Drops everything up to and including the category noun.
+  # 'venture' is deliberately absent: it collides with "venture debt".
+  - '^.{0,60}?\b(?:startup|marketplace|firm|platform|company|brand|maker|unicorn|soonicorn|aggregator|manufacturer)\s+'
+
+currencies:
+  - {pattern: '[$]|\bUSD\b|\bdollars?\b', currency: 'USD'}
+  - {pattern: '[₹]|\bINR\b|\bRs\.?\b|\bcrore\b|\bcr\b|\blakh\b', currency: 'INR'}

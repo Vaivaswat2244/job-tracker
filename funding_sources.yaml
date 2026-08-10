@@ -1,0 +1,44 @@
+# Funding-signal sources. Config, not code: when a site is redesigned the fix
+# belongs here, and `selector_version` should be bumped so the change is visible
+# in the poll log rather than looking like the feed quietly went quiet.
+#
+# mode:
+#   rss        parse an RSS/Atom feed (preferred — stable, cheap, intended for this)
+#   json_path  pull an embedded JSON blob out of the page (Next.js __NEXT_DATA__)
+#   css        parse the listing page with CSS selectors (last resort: brittle)
+
+sources:
+  - name: entrackr
+    enabled: true
+    mode: rss
+    # /feed 404s here; /rss is the real one.
+    url: https://entrackr.com/rss
+    selector_version: 1
+
+  - name: inc42
+    enabled: true
+    mode: rss
+    url: https://inc42.com/feed
+    selector_version: 1
+
+  - name: vccircle
+    enabled: true
+    # No feed: /feed and /rss both 500. Falls back to the funding listing page.
+    mode: json_path
+    url: https://www.vccircle.com/deal-type/venture-capital
+    # The page is Next.js. Its CSS class names are build-hashed
+    # ("newsCard_article-wrapper__E1o4O") and change on every deploy, so the
+    # embedded JSON is used instead — it survives redesigns that CSS cannot.
+    json_script_id: __NEXT_DATA__
+    json_path: props.pageProps.data.all_articles
+    fields:
+      title: title
+      slug: slug
+      published: publish
+    link_prefix: https://www.vccircle.com/
+    selector_version: 1
+    # Site sets Crawl-Delay: 20 in robots.txt. One request per run stays well inside it.
+    css_fallback:
+      item: 'div[class*="newsCard_article-wrapper"]'
+      title: 'a[href^="/"]'
+      link: 'a[href^="/"]'

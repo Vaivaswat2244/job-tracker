@@ -1,0 +1,13 @@
+[Unit]
+Description=Push the job pipeline to the shared Google Sheet at 09:05
+
+[Timer]
+# Five minutes after the digest, so what the sheet shows and what the morning
+# digest said are the same picture. RandomizedDelaySec keeps a laptop that
+# wakes at 09:04 from racing the digest to the same data.
+OnCalendar=*-*-* 09:05:00
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
