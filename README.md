@@ -4,6 +4,8 @@ Tracker, follow-up, ATS watchlist polling, and funding-signal ingest. Local-firs
 user, zero recurring cost. SQLite is the source of truth; the spreadsheet is a generated
 view and is never read back.
 
+Written in Go: one static binary, no venv, no interpreter on the timer path.
+
 | phase | what it does | status |
 |---|---|---|
 | 1 | tracker, follow-up ladder, xlsx export | built |
@@ -14,23 +16,33 @@ view and is never read back.
 ## Setup
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+make build                    # -> bin/tracker
 cp .env.example .env          # optional, for phone push
-./systemd/install.sh          # installs all four timers
-.venv/bin/python -m pytest -q # 209 tests, no network
+make install-timers           # builds, then installs all five timers
+make test                     # go test ./...
 ```
 
-Four user timers are installed: hourly `poll`, twice-daily `funding poll`, the 09:00
-`digest`, and the 09:30 follow-up check.
+Five user timers are installed: hourly `poll`, twice-daily `funding poll`, the 09:00
+`digest`, the 09:30 follow-up check, and the 09:05 Google Sheet push. Each fires under
+`Persistent=true`, so a run missed while the laptop was asleep happens on wake rather than
+being skipped.
+
+The hourly poll timer is a *check*, not a poll: a company is only fetched once its cadence
+has elapsed — 3h at `high` priority, 6h at `normal` — so 22 `normal` companies are each
+polled about four times a day. `tracker-sheet` fails with setup instructions until
+`GOOGLE_SHEET_ID` is configured; that is expected until you finish the Sheet setup below.
 
 Optional phone push via ntfy. Public topics are readable by anyone who knows the name,
 so generate an unguessable one and keep it out of git (`.env` is already ignored):
 
 ```bash
-python3 -c "import secrets; print('NTFY_TOPIC=' + secrets.token_urlsafe(18))" >> .env
+echo "NTFY_TOPIC=$(tr -dc 'A-Za-z0-9_-' </dev/urandom | head -c 24)" >> .env
 ```
 
 ## Daily use
+
+`./tracker.sh` builds on first use and execs `bin/tracker`, so it works from any
+directory; `bin/tracker` directly is the same thing once built.
 
 ```bash
 ./tracker.sh add-job <url>              # -> job id, in about five seconds
@@ -38,7 +50,9 @@ python3 -c "import secrets; print('NTFY_TOPIC=' + secrets.token_urlsafe(18))" >>
 ./tracker.sh status <app_id> <status>   # found|applied|followed_up|in_process|offer|rejected|ghosted
 ./tracker.sh contact add <company_id>   # interactive; flags also accepted
 ./tracker.sh list                       # active applications, soonest follow-up first
+./tracker.sh jobs                       # everything poll ingested (see below)
 ./tracker.sh export                     # tracker.xlsx
+./tracker.sh sheet push                 # -> the shared Google Sheet
 ```
 
 `add-job` flags: `--company`, `--title`, `--source`, `--notes`, `--no-fetch`.
@@ -56,15 +70,41 @@ Ingest and review:
 ./tracker.sh candidate approve <id>        # the only route into the watchlist
 ./tracker.sh digest                        # alerts, funded window, new roles
 ./tracker.sh renormalize                   # re-derive heuristics over stored jobs
+./tracker.sh followups                     # the ladder; what the 09:30 timer runs
 ```
 
 A JD fetch failure is never fatal — the row is created with an empty `jd_text` and a
 warning on stderr. Losing the row is worse than losing the description. `add-job` on a
 URL already tracked prints the existing job id rather than creating a duplicate.
 
+## Seeing what was ingested
+
+`list` shows **applications** — things you applied to or added by hand. `jobs` shows the
+**pipeline**: every role `poll` collected, which is the far larger number and is invisible
+to `list` by design.
+
+```bash
+./tracker.sh jobs --india --title engineer     # India-friendly engineering roles
+./tracker.sh jobs --company grafana --since 7d # one company, last week
+./tracker.sh jobs --remote --limit 0 --urls    # everything remote, with apply links
+```
+
+Filters: `--company`, `--title` (substrings, case-insensitive), `--india`, `--remote`,
+`--since` (`7d`, `48h`, `2w`, or `2026-08-01`), `--limit` (default 50, `0` for all),
+`--dupes`, `--urls`.
+
+Ordering is the same everywhere: auth-gated roles sort **last**, India-friendly roles
+first, then newest. A flag never removes a row (INV-1). Rows linked to a canonical
+duplicate are hidden unless `--dupes`.
+
+Both flags are compared through `COALESCE`, because in SQLite `NULL = 1` is NULL, not
+false, and NULL sorts last under DESC. Without it every job whose geography could not be
+determined — 257 on current data, and every hand-added referral, which never gets the
+column set — would sort below known-not-India roles. Unknown is not the same as no.
+
 ## Follow-ups
 
-`check_followups.py` runs daily at 09:30 via a systemd **user** timer and fires
+`tracker followups` runs daily at 09:30 via a systemd **user** timer and fires
 `notify-send` (plus ntfy if configured). The body carries role, company, first contact,
 and days elapsed — enough to act without opening anything.
 
@@ -83,7 +123,7 @@ business days.
 Check it without waiting for the timer:
 
 ```bash
-.venv/bin/python check_followups.py --dry-run   # notifies, records nothing
+./tracker.sh followups --dry-run   # notifies, records nothing
 systemctl --user list-timers tracker-followups.timer
 journalctl --user -u tracker-followups.service -n 20
 ```
@@ -168,6 +208,59 @@ not yet on the watchlist, Phase 2's ATS detection runs against the resolved doma
 result is stored on the candidate row for one-key approval. **No path in Phase 3 inserts
 into `companies` without `candidate approve`.**
 
+## The spreadsheet
+
+`export` writes three sheets, one-way, and never reads state back:
+
+| sheet | rows | what it is |
+|---|---|---|
+| Applications | one per application | what you applied to, status-coloured |
+| Pipeline | one per ingested job | everything `poll` collected |
+| Contacts | one per contact | `inferred` addresses render `[UNVERIFIED: …]` |
+
+Applications starts `FROM applications`, so it is **empty until you apply to something** —
+that is correct, not a bug, but it meant the workbook said nothing about the 2000+ roles
+already collected. Pipeline is that view: same filter and ordering as `jobs`, shared code,
+so the sheet and the terminal cannot disagree. India-friendly cells are filled green,
+auth-required amber, and both sheets carry a freeze pane and an autofilter.
+
+## The shared Google Sheet
+
+`sheet push` sends **Pipeline and Applications** to a Google Sheet you own, so the pipeline
+can be read on a phone or shared with friends. Same direction as the xlsx: one-way, never
+read back. Both destinations build their rows from `internal/export`, so the sheet, the
+workbook and `jobs` cannot disagree.
+
+**Contacts is deliberately not pushed.** It holds other people's names, titles and email
+addresses, including `inferred` ones that exist only as guesses. A document shared with
+other people is the wrong home for third parties' contact details, and an unverified guess
+read by someone else is the harm INV-2 exists to prevent. Contacts stays in the local xlsx.
+`TestContactsAreNeverPushed` is what stops someone quietly adding it.
+
+Setup, once (`tracker sheet setup` prints this):
+
+1. Create an empty spreadsheet in your own Drive — **you** stay the owner, so sharing and
+   revoking work the ordinary way.
+2. In console.cloud.google.com: new project → enable the Google Sheets API → IAM & Admin →
+   Service Accounts → Create → Keys → Add key (JSON).
+3. Save the JSON outside the repo, e.g. `~/.config/tracker/google-sheet.json`, `chmod 600`.
+4. Share the spreadsheet with the key's `client_email` as an **Editor**.
+5. Put `GOOGLE_SHEET_ID` and `GOOGLE_SHEET_CREDENTIALS` in `.env` (gitignored).
+
+```bash
+tracker sheet push --dry-run   # what would be sent, no network, no credentials needed
+tracker sheet push
+```
+
+A service account rather than a user OAuth flow because the 09:05 timer has no browser to
+complete a consent screen. Values are written with `ValueInputOption: RAW`, never
+`USER_ENTERED`: job titles come from third-party ATS feeds, and a title beginning with `=`
+would otherwise evaluate as a formula in a document other people open.
+
+The push clears each tab before writing, so a role that leaves the pipeline does not linger
+as a stale row. Column widths and the filter are applied only when a tab is first created —
+re-imposing them daily would stamp on anything a reader adjusted.
+
 ## Invariants this code enforces
 
 **INV-1 — never silently lose an opportunity.** Ingest is append-only. `add-job` always
@@ -201,25 +294,40 @@ watchlist.yaml           hand-curated companies to poll
 funding_sources.yaml     per-source feed/selector config + selector_version
 funding_rules.yaml       extraction regexes (triggers, stages, currencies)
 
-tracker/db.py            schema, migrations, excluded_log
-tracker/cli.py           every command
-tracker/fetch.py         tolerant JD fetch, company/domain inference
-tracker/export.py        openpyxl -> tracker.xlsx, status colours
-tracker/notify.py        notify-send + optional ntfy
-tracker/dates.py         business-day arithmetic
-tracker/http.py          retries, backoff, conditional GET, per-host politeness, robots
-tracker/textutil.py      HTML/entity coercion shared by adapters
-tracker/normalize.py     comp_model, auth_required, hires_in_india, dedupe keys
-tracker/watchlist.py     YAML load/save/sync, poll cadence, priority decay
-tracker/ingest.py        idempotent upsert, cross-source dedupe, renormalize
-tracker/health.py        poll_log, stale_feed detection, alerts
-tracker/poll.py          concurrent poll orchestration
-tracker/digest.py        alerts -> funded -> needs-review -> new roles
-tracker/ats/             detect.py + greenhouse/lever/ashby adapters
-tracker/funding/         sources.py, extract.py, resolve.py, run.py
-check_followups.py       escalation ladder, run by the timer
-tests/                   209 offline tests + captured provider fixtures
+cmd/tracker/             main; dispatches to internal/cli
+internal/cli/            every command, flag parsing, table output
+internal/db/             schema, migrations, excluded_log
+internal/jobs/           the ingested-pipeline read model, shared by `jobs` and export
+internal/followup/       the escalation ladder, run by the 09:30 timer
+internal/fetch/          tolerant JD fetch, company/domain inference
+internal/export/         row builders + excelize -> tracker.xlsx, status colours
+internal/gsheet/         Pipeline + Applications -> a shared Google Sheet
+internal/notify/         notify-send + optional ntfy
+internal/dates/          business-day arithmetic
+internal/httpx/          retries, backoff, conditional GET, per-host politeness, robots
+internal/textutil/       HTML/entity coercion shared by adapters
+internal/normalize/      comp_model, auth_required, hires_in_india, dedupe keys
+internal/watchlist/      YAML load/save/sync, poll cadence, priority decay
+internal/ingest/         idempotent upsert, cross-source dedupe, renormalize
+internal/health/         poll_log, stale_feed detection, alerts
+internal/poll/           concurrent poll orchestration
+internal/digest/         alerts -> funded -> needs-review -> new roles
+internal/ats/            detect + greenhouse/lever/ashby adapters
+internal/funding/        sources, extract, resolve, run
+cmd/differ/              Go-vs-Python funding extraction differ (parity harness)
+
+tracker/, tests/,        the previous Python implementation and its 209 tests.
+check_followups.py       Retained as the parity oracle; nothing live runs it.
 ```
+
+### The Python tree
+
+`tracker/`, `check_followups.py` and `tests/` are the implementation this Go build
+replaced. Nothing on the live path touches them any more — all four timers and
+`tracker.sh` run `bin/tracker`. They are kept deliberately: the 209 pytest cases and
+`cmd/differ` are what the port was verified against, and they are the only executable
+record of the intended behaviour. Deleting them is safe once you no longer want that
+check; it costs nothing to keep and does not run.
 
 ## Not built yet, on purpose
 
