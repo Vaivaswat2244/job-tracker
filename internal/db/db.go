@@ -13,13 +13,28 @@ import (
 )
 
 // DefaultPath resolves the DB location the way the Python build did: the
-// TRACKER_DB override, else tracker.db next to the executable's project root.
+// TRACKER_DB override, else tracker.db at the project root.
+//
+// The executable lives at <root>/bin/tracker, so the project root is one level
+// up from the binary. Getting this wrong is silent and expensive: the app would
+// open an empty bin/tracker.db and report an empty pipeline rather than fail.
 func DefaultPath() string {
 	if p := os.Getenv("TRACKER_DB"); p != "" {
 		return p
 	}
+	// An existing tracker.db in the working directory wins. systemd sets
+	// WorkingDirectory to the project root, and so does the shell wrapper.
+	if _, err := os.Stat("tracker.db"); err == nil {
+		if abs, err := filepath.Abs("tracker.db"); err == nil {
+			return abs
+		}
+	}
 	if exe, err := os.Executable(); err == nil {
-		if root, err := filepath.Abs(filepath.Dir(exe)); err == nil {
+		dir := filepath.Dir(exe)
+		if filepath.Base(dir) == "bin" {
+			dir = filepath.Dir(dir)
+		}
+		if root, err := filepath.Abs(dir); err == nil {
 			return filepath.Join(root, "tracker.db")
 		}
 	}
