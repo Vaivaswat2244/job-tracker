@@ -4,4 +4,4 @@ Description=Daily job pipeline digest
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Documents/projects/Tracker
-ExecStart=%h/Documents/projects/Tracker/.venv/bin/python -m tracker.cli digest --notify
+ExecStart=%h/Documents/projects/Tracker/bin/tracker digest --notify
