@@ -7,6 +7,7 @@
 package httpx
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,9 +169,12 @@ func Get(rawURL string, opts Options) Fetch {
 		opts.Attempts = Attempts
 	}
 
+	// Accept-Encoding is deliberately not set here. net/http adds it and
+	// transparently decompresses the response only when it owns the header;
+	// setting it by hand opts out of that and hands back raw gzip, which every
+	// RSS parse then rejects as "illegal character code U+001F".
 	hdrs := map[string]string{
-		"User-Agent":      UserAgent(),
-		"Accept-Encoding": "gzip",
+		"User-Agent": UserAgent(),
 	}
 	if opts.ETag != "" {
 		hdrs["If-None-Match"] = opts.ETag
@@ -249,7 +253,21 @@ func Get(rawURL string, opts Options) Fetch {
 			return out
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		// A server may compress even when nothing asked it to, and Go only
+		// auto-decompresses what it negotiated itself.
+		reader := io.Reader(resp.Body)
+		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+			zr, zerr := gzip.NewReader(resp.Body)
+			if zerr != nil {
+				resp.Body.Close()
+				out.Err = fmt.Sprintf("gzip: %v", zerr)
+				return out
+			}
+			defer zr.Close()
+			reader = zr
+		}
+
+		body, err := io.ReadAll(reader)
 		resp.Body.Close()
 		if err != nil {
 			out.Err = err.Error()
