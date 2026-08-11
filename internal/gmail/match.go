@@ -162,15 +162,19 @@ func resolveSingleJob(conn *sql.DB, companyID int64, m Match) Match {
 
 // ResolveThread finds the application a reply belongs to by its thread, which
 // is exact when the tracker drafted the outreach that started it.
-func ResolveThread(conn *sql.DB, threadID string) (sql.NullInt64, bool) {
+//
+// Thread ids are per-mailbox, so the account has to be part of the lookup:
+// without it a thread in one account could claim an application matched in the
+// other.
+func ResolveThread(conn *sql.DB, account, threadID string) (sql.NullInt64, bool) {
 	if threadID == "" {
 		return sql.NullInt64{}, false
 	}
 	var appID sql.NullInt64
 	err := conn.QueryRow(
 		"SELECT application_id FROM mail_messages"+
-			" WHERE thread_id = ? AND application_id IS NOT NULL"+
-			" ORDER BY received_at LIMIT 1", threadID).Scan(&appID)
+			" WHERE account = ? AND thread_id = ? AND application_id IS NOT NULL"+
+			" ORDER BY received_at LIMIT 1", account, threadID).Scan(&appID)
 	if err != nil || !appID.Valid {
 		return sql.NullInt64{}, false
 	}

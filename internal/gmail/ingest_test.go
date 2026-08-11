@@ -12,6 +12,8 @@ import (
 
 var now = time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC)
 
+var personal = Account{Name: "personal", Email: "me@example.com"}
+
 func seed(t *testing.T) *sql.DB {
 	t.Helper()
 	conn, err := db.Connect(filepath.Join(t.TempDir(), "test.db"))
@@ -64,7 +66,7 @@ func status(t *testing.T, conn *sql.DB, appID int64) string {
 
 func mustIngest(t *testing.T, conn *sql.DB, m Message) Action {
 	t.Helper()
-	a, err := Ingest(conn, m, now)
+	a, err := Ingest(conn, personal, m, now)
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -228,7 +230,7 @@ func TestIngestIsIdempotent(t *testing.T) {
 	}
 	mustIngest(t, conn, msg)
 
-	_, err := Ingest(conn, msg, now)
+	_, err := Ingest(conn, personal, msg, now)
 	if !AlreadySeen(err) {
 		t.Fatalf("second ingest returned %v, want the already-seen sentinel", err)
 	}

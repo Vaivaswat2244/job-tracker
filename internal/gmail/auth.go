@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,12 +22,33 @@ import (
 
 const (
 	// ClientEnv points at the OAuth client JSON downloaded from Google Cloud.
+	// One client authorizes any number of accounts: `mail auth` is run once per
+	// mailbox, choosing a different Google account in the browser each time.
 	ClientEnv = "GMAIL_CLIENT_SECRET"
-	// TokenEnv overrides where the refresh token is cached.
-	TokenEnv = "GMAIL_TOKEN"
+	// TokenDirEnv overrides where per-account refresh tokens are cached.
+	TokenDirEnv = "GMAIL_TOKEN_DIR"
 	// QueryEnv overrides the Gmail search the poll runs.
 	QueryEnv = "GMAIL_QUERY"
+
+	// DefaultAccount is the label used when none is given, so a single-mailbox
+	// setup never has to think about accounts at all.
+	DefaultAccount = "default"
+
+	tokenPrefix = "gmail-token-"
+	tokenSuffix = ".json"
 )
+
+// validAccount keeps a label safe to put in a filename and readable in the CLI.
+var validAccount = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,30}$`)
+
+// ValidateAccount rejects labels that would escape the token directory.
+func ValidateAccount(name string) error {
+	if !validAccount.MatchString(name) {
+		return fmt.Errorf(
+			"account %q must be lowercase letters, digits, - or _ (e.g. personal, college)", name)
+	}
+	return nil
+}
 
 // DefaultQuery is what the poll searches for. Narrow on purpose: this reads a
 // personal mailbox, and there is no reason to pull messages that cannot
@@ -38,11 +61,42 @@ const DefaultQuery = `(subject:(application OR applying OR candidacy OR intervie
 // set up wrongly — the timer exits quietly on the former, loudly on the latter.
 var ErrNotConfigured = fmt.Errorf("gmail ingest not configured (%s unset)", ClientEnv)
 
-// Config locates the OAuth client and the cached token.
+// Config locates the OAuth client and the directory of per-account tokens.
 type Config struct {
 	ClientPath string
-	TokenPath  string
+	TokenDir   string
 	Query      string
+}
+
+// TokenPath is where one account's refresh token lives.
+func (c Config) TokenPath(account string) string {
+	return filepath.Join(c.TokenDir, tokenPrefix+account+tokenSuffix)
+}
+
+// Accounts lists every mailbox that has been authorized, by reading the token
+// directory rather than a config list. What is connected is the ground truth;
+// a separate list of account names would only drift from it.
+func (c Config) Accounts() ([]string, error) {
+	entries, err := os.ReadDir(c.TokenDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read token directory: %w", err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, tokenPrefix) || !strings.HasSuffix(name, tokenSuffix) {
+			continue
+		}
+		account := strings.TrimSuffix(strings.TrimPrefix(name, tokenPrefix), tokenSuffix)
+		if ValidateAccount(account) == nil {
+			out = append(out, account)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // LoadConfig reads .env then the environment.
@@ -51,18 +105,18 @@ func LoadConfig() (Config, error) {
 
 	cfg := Config{
 		ClientPath: strings.TrimSpace(os.Getenv(ClientEnv)),
-		TokenPath:  strings.TrimSpace(os.Getenv(TokenEnv)),
+		TokenDir:   strings.TrimSpace(os.Getenv(TokenDirEnv)),
 		Query:      strings.TrimSpace(os.Getenv(QueryEnv)),
 	}
 	if cfg.Query == "" {
 		cfg.Query = DefaultQuery
 	}
-	if cfg.TokenPath == "" {
+	if cfg.TokenDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return cfg, fmt.Errorf("locate home directory: %w", err)
 		}
-		cfg.TokenPath = filepath.Join(home, ".config", "tracker", "gmail-token.json")
+		cfg.TokenDir = filepath.Join(home, ".config", "tracker")
 	}
 	if cfg.ClientPath == "" {
 		return cfg, ErrNotConfigured
@@ -98,7 +152,7 @@ func oauthConfig(cfg Config, redirect string) (*oauth2.Config, error) {
 // It listens on loopback rather than pasting a code: Google retired the
 // out-of-band copy-paste flow, and a desktop client is expected to receive the
 // redirect on 127.0.0.1.
-func Authorize(ctx context.Context, cfg Config, open func(string)) error {
+func Authorize(ctx context.Context, cfg Config, account string, open func(string)) error {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("open loopback listener: %w", err)
@@ -165,7 +219,7 @@ func Authorize(ctx context.Context, cfg Config, open func(string)) error {
 		return fmt.Errorf("google returned no refresh token; revoke the app at " +
 			"myaccount.google.com/permissions and run auth again")
 	}
-	return saveToken(cfg.TokenPath, token)
+	return saveToken(cfg.TokenPath(account), token)
 }
 
 func saveToken(path string, token *oauth2.Token) error {
@@ -197,15 +251,15 @@ func loadToken(path string) (*oauth2.Token, error) {
 
 // Service builds an authenticated Gmail client from the cached token,
 // refreshing it and writing the refreshed copy back.
-func Service(ctx context.Context, cfg Config) (*gmail.Service, error) {
+func Service(ctx context.Context, cfg Config, account string) (*gmail.Service, error) {
 	oc, err := oauthConfig(cfg, "")
 	if err != nil {
 		return nil, err
 	}
-	token, err := loadToken(cfg.TokenPath)
+	token, err := loadToken(cfg.TokenPath(account))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("not authorized yet — run `tracker mail auth`")
+			return nil, fmt.Errorf("account %q is not authorized — run `tracker mail auth --account %s`", account, account)
 		}
 		return nil, err
 	}
@@ -219,7 +273,7 @@ func Service(ctx context.Context, cfg Config) (*gmail.Service, error) {
 		if refreshed.RefreshToken == "" {
 			refreshed.RefreshToken = token.RefreshToken
 		}
-		if err := saveToken(cfg.TokenPath, refreshed); err != nil {
+		if err := saveToken(cfg.TokenPath(account), refreshed); err != nil {
 			return nil, err
 		}
 	}

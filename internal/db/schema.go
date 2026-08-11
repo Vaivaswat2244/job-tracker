@@ -101,24 +101,7 @@ CREATE TABLE IF NOT EXISTS outreach (
 -- to exactly one application with confidence, it is recorded and queued rather
 -- than guessed at. A wrong auto-transition is worse than a queue, because the
 -- user stops trusting the status column.
-CREATE TABLE IF NOT EXISTS mail_messages (
-    gmail_id TEXT PRIMARY KEY,
-    thread_id TEXT,
-    from_addr TEXT,
-    from_domain TEXT,
-    subject TEXT,
-    received_at TEXT,
-    kind TEXT NOT NULL,              -- confirmation | rejection | reply | other
-    company_id INTEGER REFERENCES companies(id),
-    job_id INTEGER REFERENCES jobs(id),
-    application_id INTEGER REFERENCES applications(id),
-    action TEXT NOT NULL,            -- applied | rejected | replied | queued | none
-    needs_review INTEGER NOT NULL DEFAULT 0,
-    reason TEXT,
-    company_guess TEXT,              -- what the subject line claimed, pre-match
-    decided_at TEXT,
-    seen_at TEXT NOT NULL
-);
+` + mailMessagesTable + `
 
 CREATE TABLE IF NOT EXISTS excluded_log (
     id INTEGER PRIMARY KEY,
@@ -257,6 +240,37 @@ var addedColumns = []struct {
 		{"dedupe_key", "TEXT"}, // normalized company|title|posted_week
 	}},
 }
+
+// mailMessagesTable is kept separate from Schema because the migration that
+// rebuilds an old single-account table has to create the new one with exactly
+// this definition. Two copies of the DDL would drift.
+//
+// The key is (account, gmail_id), not gmail_id alone: Gmail ids are unique
+// within a mailbox, not across mailboxes. With two accounts connected, a bare
+// gmail_id primary key would let a message from the second account collide with
+// one from the first and be silently swallowed as "already processed".
+const mailMessagesTable = `
+CREATE TABLE IF NOT EXISTS mail_messages (
+    account TEXT NOT NULL DEFAULT 'default',
+    account_email TEXT,
+    gmail_id TEXT NOT NULL,
+    thread_id TEXT,
+    from_addr TEXT,
+    from_domain TEXT,
+    subject TEXT,
+    received_at TEXT,
+    kind TEXT NOT NULL,              -- confirmation | rejection | reply | other
+    company_id INTEGER REFERENCES companies(id),
+    job_id INTEGER REFERENCES jobs(id),
+    application_id INTEGER REFERENCES applications(id),
+    action TEXT NOT NULL,            -- applied | rejected | replied | queued | none
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    company_guess TEXT,              -- what the subject line claimed, pre-match
+    decided_at TEXT,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (account, gmail_id)
+);`
 
 // postIndexes includes the idempotent upsert key for ingested jobs. It is
 // partial so manually added rows, which have no external_id, are never forced

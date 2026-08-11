@@ -33,9 +33,11 @@ type Result struct {
 // Ingest classifies a message, applies what it can, and records the outcome.
 // It is idempotent on gmail_id: a message already in mail_messages is skipped,
 // so re-polling the same window costs nothing and can never double-act.
-func Ingest(conn *sql.DB, m Message, now time.Time) (Action, error) {
+func Ingest(conn *sql.DB, acct Account, m Message, now time.Time) (Action, error) {
 	var seen string
-	err := conn.QueryRow("SELECT seen_at FROM mail_messages WHERE gmail_id = ?", m.ID).Scan(&seen)
+	err := conn.QueryRow(
+		"SELECT seen_at FROM mail_messages WHERE account = ? AND gmail_id = ?",
+		acct.Name, m.ID).Scan(&seen)
 	if err == nil {
 		return ActionNone, errAlreadySeen
 	}
@@ -45,6 +47,7 @@ func Ingest(conn *sql.DB, m Message, now time.Time) (Action, error) {
 
 	kind := Classify(m)
 	record := mailRecord{
+		acct: acct,
 		msg:  m,
 		kind: kind,
 		now:  now.UTC().Format(db.ISO8601),
@@ -58,7 +61,7 @@ func Ingest(conn *sql.DB, m Message, now time.Time) (Action, error) {
 	case Reply:
 		// A reply only matters if it answers a thread we know about; anything
 		// else is ordinary mail that happens to start with "Re:".
-		appID, ok := ResolveThread(conn, m.ThreadID)
+		appID, ok := ResolveThread(conn, acct.Name, m.ThreadID)
 		if !ok {
 			record.action = ActionNone
 			record.reason = "reply on an unrecognised thread"
@@ -177,8 +180,15 @@ func markReplied(conn *sql.DB, appID int64, now string) error {
 	return nil
 }
 
+// Account identifies which connected mailbox a message came from.
+type Account struct {
+	Name  string // the label used in the CLI: personal, college, ...
+	Email string // the address, resolved once per poll, for display
+}
+
 // mailRecord is the row written for every message, acted on or not.
 type mailRecord struct {
+	acct          Account
 	msg           Message
 	kind          Kind
 	action        Action
@@ -197,9 +207,11 @@ func (r mailRecord) save(conn *sql.DB) error {
 		review = 1
 	}
 	_, err := conn.Exec(
-		"INSERT INTO mail_messages (gmail_id, thread_id, from_addr, from_domain, subject,"+
-			" received_at, kind, company_id, job_id, application_id, action, needs_review,"+
-			" reason, company_guess, seen_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"INSERT INTO mail_messages (account, account_email, gmail_id, thread_id, from_addr,"+
+			" from_domain, subject, received_at, kind, company_id, job_id, application_id,"+
+			" action, needs_review, reason, company_guess, seen_at)"+
+			" VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		r.acct.Name, nullStr(r.acct.Email),
 		r.msg.ID, r.msg.ThreadID, Address(r.msg.From), Domain(r.msg.From), r.msg.Subject,
 		r.msg.ReceivedAt, string(r.kind), nullInt(r.companyID), nullInt(r.jobID),
 		nullInt(r.applicationID), string(r.action), review,

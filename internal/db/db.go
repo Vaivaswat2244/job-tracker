@@ -102,10 +102,60 @@ func Migrate(conn *sql.DB) error {
 			}
 		}
 	}
+	if err := migrateMailKey(conn); err != nil {
+		return err
+	}
 	for _, stmt := range postIndexes {
 		if _, err := conn.Exec(stmt); err != nil {
 			return fmt.Errorf("create index: %w", err)
 		}
+	}
+	return nil
+}
+
+// migrateMailKey rebuilds mail_messages when it predates multi-account support.
+//
+// The first version keyed on gmail_id alone. Gmail ids are unique per mailbox,
+// not across mailboxes, so with a second account connected a colliding id would
+// be silently treated as already processed and its message never acted on.
+// SQLite cannot alter a primary key, so the table is rebuilt in place.
+func migrateMailKey(conn *sql.DB) error {
+	have, err := columnNames(conn, "mail_messages")
+	if err != nil {
+		return err
+	}
+	if len(have) == 0 {
+		return nil // table not created yet; the schema will make it correctly
+	}
+	if _, ok := have["account"]; ok {
+		return nil
+	}
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin mail migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, stmt := range []string{
+		"ALTER TABLE mail_messages RENAME TO mail_messages_old",
+		mailMessagesTable,
+		// Existing rows all came from the single mailbox, which is 'default'.
+		`INSERT INTO mail_messages (account, gmail_id, thread_id, from_addr, from_domain,
+		    subject, received_at, kind, company_id, job_id, application_id, action,
+		    needs_review, reason, company_guess, decided_at, seen_at)
+		 SELECT 'default', gmail_id, thread_id, from_addr, from_domain, subject,
+		    received_at, kind, company_id, job_id, application_id, action,
+		    needs_review, reason, company_guess, decided_at, seen_at
+		 FROM mail_messages_old`,
+		"DROP TABLE mail_messages_old",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("rebuild mail_messages: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit mail migration: %w", err)
 	}
 	return nil
 }

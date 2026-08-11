@@ -11,6 +11,8 @@ import (
 
 // Pending is one queued message awaiting a decision.
 type Pending struct {
+	Account      string
+	AccountEmail sql.NullString
 	GmailID      string
 	Subject      string
 	From         string
@@ -24,7 +26,8 @@ type Pending struct {
 // the one whose application is closest to being wrongly ghosted.
 func PendingList(conn *sql.DB) ([]Pending, error) {
 	rows, err := conn.Query(
-		"SELECT gmail_id, subject, from_addr, received_at, kind, company_guess, reason" +
+		"SELECT account, account_email, gmail_id, subject, from_addr, received_at," +
+			" kind, company_guess, reason" +
 			" FROM mail_messages WHERE needs_review = 1 AND decided_at IS NULL" +
 			" ORDER BY received_at")
 	if err != nil {
@@ -36,8 +39,8 @@ func PendingList(conn *sql.DB) ([]Pending, error) {
 	for rows.Next() {
 		var p Pending
 		var kind string
-		if err := rows.Scan(&p.GmailID, &p.Subject, &p.From, &p.ReceivedAt,
-			&kind, &p.CompanyGuess, &p.Reason); err != nil {
+		if err := rows.Scan(&p.Account, &p.AccountEmail, &p.GmailID, &p.Subject,
+			&p.From, &p.ReceivedAt, &kind, &p.CompanyGuess, &p.Reason); err != nil {
 			return nil, fmt.Errorf("scan pending mail: %w", err)
 		}
 		p.Kind = Kind(kind)
@@ -52,12 +55,12 @@ func PendingList(conn *sql.DB) ([]Pending, error) {
 // Passing jobID = 0 dismisses the message instead: it stays on file with a
 // decided_at, so it never reappears and the record of the decision survives.
 func Resolve(conn *sql.DB, gmailID string, jobID int64, now time.Time) (Action, error) {
-	var kind, action string
+	var account, kind, action string
 	var appID sql.NullInt64
 	err := conn.QueryRow(
-		"SELECT kind, action, application_id FROM mail_messages"+
+		"SELECT account, kind, action, application_id FROM mail_messages"+
 			" WHERE gmail_id = ? AND needs_review = 1 AND decided_at IS NULL",
-		gmailID).Scan(&kind, &action, &appID)
+		gmailID).Scan(&account, &kind, &action, &appID)
 	if err == sql.ErrNoRows {
 		return ActionNone, fmt.Errorf("no message queued for review with id %s", gmailID)
 	}
@@ -67,7 +70,7 @@ func Resolve(conn *sql.DB, gmailID string, jobID int64, now time.Time) (Action, 
 
 	stamp := now.UTC().Format(db.ISO8601)
 	if jobID == 0 {
-		if err := decide(conn, gmailID, ActionNone, sql.NullInt64{}, sql.NullInt64{}, stamp); err != nil {
+		if err := decide(conn, account, gmailID, ActionNone, sql.NullInt64{}, sql.NullInt64{}, stamp); err != nil {
 			return ActionNone, err
 		}
 		return ActionNone, nil
@@ -102,19 +105,24 @@ func Resolve(conn *sql.DB, gmailID string, jobID int64, now time.Time) (Action, 
 		return ActionNone, fmt.Errorf("message %s is a %s; nothing to apply", gmailID, kind)
 	}
 
-	if err := decide(conn, gmailID, resolved, appID,
+	if err := decide(conn, account, gmailID, resolved, appID,
 		sql.NullInt64{Int64: jobID, Valid: true}, stamp); err != nil {
 		return ActionNone, err
 	}
 	return resolved, nil
 }
 
-func decide(conn *sql.DB, gmailID string, action Action, appID, jobID sql.NullInt64, stamp string) error {
+// decide scopes the update by account as well as id. Gmail ids are unique per
+// mailbox, so with two accounts connected an id-only UPDATE could in principle
+// resolve a queued message in the other mailbox at the same time.
+func decide(conn *sql.DB, account, gmailID string, action Action,
+	appID, jobID sql.NullInt64, stamp string) error {
+
 	_, err := conn.Exec(
 		"UPDATE mail_messages SET action = ?, application_id = COALESCE(?, application_id),"+
 			" job_id = COALESCE(?, job_id), needs_review = 0, decided_at = ?"+
-			" WHERE gmail_id = ?",
-		string(action), nullInt(appID), nullInt(jobID), stamp, gmailID)
+			" WHERE account = ? AND gmail_id = ?",
+		string(action), nullInt(appID), nullInt(jobID), stamp, account, gmailID)
 	if err != nil {
 		return fmt.Errorf("record decision: %w", err)
 	}

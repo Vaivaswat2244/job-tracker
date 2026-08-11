@@ -11,14 +11,30 @@ import (
 	"google.golang.org/api/gmail/v1"
 )
 
-// MaxMessages caps one run. The window is a few days of mail, not a mailbox
-// archive; a cap keeps a misconfigured query from pulling thousands of
-// messages and burning quota.
-const MaxMessages = 200
+// DefaultMaxMessages caps one run. The routine window is a few days of mail,
+// not a mailbox archive; a cap keeps a misconfigured query from pulling
+// thousands of messages and burning quota. A first backfill raises it.
+const DefaultMaxMessages = 200
 
-// Poll reads recent mail and applies what it can. Returns a summary.
-func Poll(ctx context.Context, conn *sql.DB, svc *gmail.Service, cfg Config, since time.Duration) (Result, error) {
+// WhoAmI returns the address behind a token, so the CLI can show which mailbox
+// a label actually points at — an account called "personal" that turns out to
+// be the college address is a confusing thing to debug later.
+func WhoAmI(ctx context.Context, svc *gmail.Service) string {
+	profile, err := svc.Users.GetProfile("me").Context(ctx).Do()
+	if err != nil {
+		return ""
+	}
+	return profile.EmailAddress
+}
+
+// Poll reads recent mail for one account and applies what it can.
+func Poll(ctx context.Context, conn *sql.DB, svc *gmail.Service, cfg Config,
+	acct Account, since time.Duration, max int) (Result, error) {
+
 	var result Result
+	if max <= 0 {
+		max = DefaultMaxMessages
+	}
 
 	query := cfg.Query
 	if since > 0 {
@@ -29,21 +45,25 @@ func Poll(ctx context.Context, conn *sql.DB, svc *gmail.Service, cfg Config, sin
 	}
 
 	var ids []*gmail.Message
-	call := svc.Users.Messages.List("me").Q(query).MaxResults(int64(MaxMessages))
+	pageSize := int64(500)
+	if int64(max) < pageSize {
+		pageSize = int64(max)
+	}
+	call := svc.Users.Messages.List("me").Q(query).MaxResults(pageSize)
 	for {
 		page, err := call.Context(ctx).Do()
 		if err != nil {
 			return result, fmt.Errorf("list messages: %w", err)
 		}
 		ids = append(ids, page.Messages...)
-		if page.NextPageToken == "" || len(ids) >= MaxMessages {
+		if page.NextPageToken == "" || len(ids) >= max {
 			break
 		}
 		call = svc.Users.Messages.List("me").Q(query).
-			MaxResults(int64(MaxMessages)).PageToken(page.NextPageToken)
+			MaxResults(pageSize).PageToken(page.NextPageToken)
 	}
-	if len(ids) > MaxMessages {
-		ids = ids[:MaxMessages]
+	if len(ids) > max {
+		ids = ids[:max]
 	}
 
 	now := time.Now().UTC()
@@ -52,7 +72,8 @@ func Poll(ctx context.Context, conn *sql.DB, svc *gmail.Service, cfg Config, sin
 		// enough to know, and message.get is the expensive call.
 		var seen string
 		if err := conn.QueryRow(
-			"SELECT gmail_id FROM mail_messages WHERE gmail_id = ?", stub.Id).Scan(&seen); err == nil {
+			"SELECT gmail_id FROM mail_messages WHERE account = ? AND gmail_id = ?",
+			acct.Name, stub.Id).Scan(&seen); err == nil {
 			result.Skipped++
 			continue
 		}
@@ -63,7 +84,7 @@ func Poll(ctx context.Context, conn *sql.DB, svc *gmail.Service, cfg Config, sin
 		}
 		result.Scanned++
 
-		action, err := Ingest(conn, fromAPI(full), now)
+		action, err := Ingest(conn, acct, fromAPI(full), now)
 		if err != nil {
 			if AlreadySeen(err) {
 				result.Skipped++
