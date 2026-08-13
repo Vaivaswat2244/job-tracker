@@ -127,11 +127,54 @@ func applyFormatting(ctx context.Context, svc *sheets.Service, spreadsheetID str
 	return nil
 }
 
-// conditionalRules colours the flag columns by value rather than by writing a
-// style per cell, so the colouring survives the next push without being
-// rewritten row by row.
+// statusColours mirror the xlsx status fills, so the same application looks the
+// same in the workbook and in the shared sheet.
+var statusColours = []struct {
+	status string
+	colour *sheets.Color
+}{
+	{"found", &sheets.Color{Red: 0.851, Green: 0.851, Blue: 0.851}},       // grey
+	{"applied", &sheets.Color{Red: 1, Green: 0.902, Blue: 0.600}},         // yellow
+	{"followed_up", &sheets.Color{Red: 0.973, Green: 0.796, Blue: 0.678}}, // orange
+	{"in_process", &sheets.Color{Red: 0.741, Green: 0.843, Blue: 0.933}},  // blue
+	{"offer", indiaGreen},
+	{"rejected", authAmber},
+	{"ghosted", authAmber},
+}
+
+// conditionalRules colours by value rather than writing a style per cell, so
+// the colouring survives the next push without being rewritten row by row —
+// and, for Applications, is already in place before the first row lands.
 func conditionalRules(t export.Table, sheetID int64) []*sheets.Request {
 	var out []*sheets.Request
+
+	// Applications is coloured by status; a table with a status column gets the
+	// ladder's palette rather than the pipeline's flags.
+	if col := t.Col("status"); col > 0 {
+		for _, s := range statusColours {
+			out = append(out, &sheets.Request{
+				AddConditionalFormatRule: &sheets.AddConditionalFormatRuleRequest{
+					Index: 0,
+					Rule: &sheets.ConditionalFormatRule{
+						Ranges: []*sheets.GridRange{{
+							SheetId:          sheetID,
+							StartRowIndex:    1,
+							StartColumnIndex: int64(col - 1),
+							EndColumnIndex:   int64(col),
+						}},
+						BooleanRule: &sheets.BooleanRule{
+							Condition: &sheets.BooleanCondition{
+								Type:   "TEXT_EQ",
+								Values: []*sheets.ConditionValue{{UserEnteredValue: s.status}},
+							},
+							Format: &sheets.CellFormat{BackgroundColor: s.colour},
+						},
+					},
+				},
+			})
+		}
+	}
+
 	for _, rule := range []struct {
 		column string
 		colour *sheets.Color

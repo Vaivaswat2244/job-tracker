@@ -486,7 +486,7 @@ func exportCmd(conn *sql.DB, args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	fmt.Printf("wrote %d application(s) + %d pipeline row(s) -> %s\n",
-		counts.Applications, counts.Pipeline, abs)
+	fmt.Printf("wrote %d application(s) + %d pipeline row(s) + %d new in 24h -> %s\n",
+		counts.Applications, counts.Pipeline, counts.New, abs)
 	return 0
 }

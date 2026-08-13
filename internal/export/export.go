@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -39,6 +40,7 @@ var contactWidths = []float64{6, 22, 22, 26, 34, 12, 34, 16}
 type Counts struct {
 	Applications int
 	Pipeline     int
+	New          int
 }
 
 // Export writes the workbook, returning its absolute path and the row counts.
@@ -126,6 +128,31 @@ func Export(conn *sql.DB, path string) (string, Counts, error) {
 		return "", counts, err
 	}
 	if err := autoFilter(f, pipeline); err != nil {
+		return "", counts, err
+	}
+
+	// The daily read goes in the workbook too, so the local copy and the shared
+	// sheet answer "what is new" the same way.
+	fresh, err := NewRoles(conn, time.Now())
+	if err != nil {
+		return "", counts, err
+	}
+	counts.New = len(fresh.Rows)
+	if _, err := f.NewSheet(fresh.Name); err != nil {
+		return "", counts, fmt.Errorf("create new-roles sheet: %w", err)
+	}
+	if err := writeTable(f, fresh, bold); err != nil {
+		return "", counts, err
+	}
+	if err := fillByValue(f, fresh, "india", flagFill(indiaColour)); err != nil {
+		return "", counts, err
+	}
+	for i, w := range pipelineWidths {
+		if err := setWidth(f, fresh.Name, i+1, w); err != nil {
+			return "", counts, err
+		}
+	}
+	if err := freeze(f, fresh.Name); err != nil {
 		return "", counts, err
 	}
 

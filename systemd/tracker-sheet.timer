@@ -1,11 +1,15 @@
 [Unit]
-Description=Push the job pipeline to the shared Google Sheet at 09:05
+Description=Push the job pipeline to the shared Google Sheet
 
 [Timer]
-# Five minutes after the digest, so what the sheet shows and what the morning
-# digest said are the same picture. RandomizedDelaySec keeps a laptop that
-# wakes at 09:04 from racing the digest to the same data.
+# Three times a day, not once. The machine is routinely off at 09:05, so that
+# run is always a Persistent catch-up firing at boot — which is exactly when DNS
+# is least likely to be up. Two more attempts while the laptop is normally awake
+# mean a failed morning push self-heals the same day instead of leaving the
+# sheet a day stale.
 OnCalendar=*-*-* 09:05:00
+OnCalendar=*-*-* 14:05:00
+OnCalendar=*-*-* 20:05:00
 RandomizedDelaySec=120
 Persistent=true
 

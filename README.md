@@ -231,7 +231,7 @@ auth-required amber, and both sheets carry a freeze pane and an autofilter.
 
 ## The shared Google Sheet
 
-`sheet push` sends **Pipeline and Applications** to a Google Sheet you own, so the pipeline
+`sheet push` sends **New (24h), Applications and Pipeline** to a Google Sheet you own, so the pipeline
 can be read on a phone or shared with friends. Same direction as the xlsx: one-way, never
 read back. Both destinations build their rows from `internal/export`, so the sheet, the
 workbook and `jobs` cannot disagree.
@@ -261,6 +261,18 @@ A service account rather than a user OAuth flow because the 09:05 timer has no b
 complete a consent screen. Values are written with `ValueInputOption: RAW`, never
 `USER_ENTERED`: job titles come from third-party ATS feeds, and a title beginning with `=`
 would otherwise evaluate as a formula in a document other people open.
+
+**New (24h)** is the tab to actually read each morning: roles first seen in the last
+rolling day, same columns and same ordering as Pipeline. It keys on `first_seen_at`
+rather than a posted date, because a board that backdates its postings would otherwise
+hide a role that only became reachable today. A rolling 24 hours rather than a calendar
+day, so it is never near-empty first thing in the morning.
+
+The push runs at **09:05, 14:05 and 20:05**. Three times, not once, because the laptop is
+routinely off at 09:05: that run is then a `Persistent=true` catch-up firing at boot,
+which is exactly when DNS is least likely to be up. Each unit also waits up to two minutes
+for DNS before starting and retries on failure, so a wake-time race costs a few minutes
+rather than a day's push.
 
 The push clears each tab before writing, so a role that leaves the pipeline does not linger
 as a stale row. Column widths and the filter are applied only when a tab is first created —

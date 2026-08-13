@@ -4,15 +4,18 @@ After=network-online.target
 Wants=network-online.target
 
 StartLimitIntervalSec=3600
-StartLimitBurst=6
+StartLimitBurst=10
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Documents/projects/Tracker
+
+# Wait for DNS before trying. A catch-up run fires the moment the laptop wakes,
+# and network-online.target does not gate it because the target was already
+# satisfied before the suspend. Bounded at ~2 minutes and always exits 0: this
+# is a courtesy wait, not a gate, and Restart below covers the rest.
+ExecStartPre=/bin/sh -c 'i=0; while [ $i -lt 24 ]; do getent hosts oauth2.googleapis.com >/dev/null 2>&1 && exit 0; i=$((i+1)); sleep 5; done; exit 0'
 ExecStart=%h/Documents/projects/Tracker/bin/tracker sheet push
 
-# A catch-up run fires the moment the laptop wakes, which races DNS coming back:
-# network-online.target was already satisfied before the suspend, so it does not
-# gate this. Without a retry the run just fails and the next one is a day away.
 Restart=on-failure
-RestartSec=90
+RestartSec=120

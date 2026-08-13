@@ -19,6 +19,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
@@ -53,10 +54,15 @@ type Config struct {
 var tableFor = map[string]func(*sql.DB) (export.Table, error){
 	"Applications": export.Applications,
 	"Pipeline":     export.Pipeline,
+	"New (24h)": func(conn *sql.DB) (export.Table, error) {
+		return export.NewRoles(conn, time.Now())
+	},
 }
 
 // pushOrder fixes the tab order; map iteration would shuffle it per run.
-var pushOrder = []string{"Pipeline", "Applications"}
+// "New (24h)" leads because it is the tab actually read each morning —
+// Pipeline is seven thousand rows of standing inventory behind it.
+var pushOrder = []string{"New (24h)", "Applications", "Pipeline"}
 
 // sheetIDPattern pulls the id out of a pasted URL like
 // https://docs.google.com/spreadsheets/d/<id>/edit#gid=0

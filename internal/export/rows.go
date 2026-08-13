@@ -9,6 +9,7 @@ package export
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/Vaivaswat2244/job-tracker/internal/dates"
 	"github.com/Vaivaswat2244/job-tracker/internal/jobs"
@@ -120,6 +121,43 @@ func Pipeline(conn *sql.DB) (Table, error) {
 			nullAny(r.PayCurrency), nullIntAny(r.HiresInIndia), nullIntAny(r.AuthRequired),
 			nilIfEmpty(r.Flags()), r.URL,
 		})
+	}
+	return t, nil
+}
+
+// NewWindow is what "posted today" means in practice. A calendar day would show
+// almost nothing first thing in the morning, when the only poll since midnight
+// ran an hour ago; a rolling day always answers "what appeared since I last
+// looked".
+const NewWindow = 24 * time.Hour
+
+// NewRoles is everything first seen inside NewWindow — the daily read, as
+// opposed to Pipeline's standing list of thousands.
+//
+// It keys on first_seen_at, not posted_at: a board that backdates its postings
+// would otherwise hide a role that only became visible to us today, and what
+// matters is when you could first have applied.
+func NewRoles(conn *sql.DB, now time.Time) (Table, error) {
+	t, err := Pipeline(conn)
+	if err != nil {
+		return t, err
+	}
+	full := t.Rows
+	t.Name = "New (24h)"
+	t.Rows = nil
+
+	cutoff := now.Add(-NewWindow).UTC().Format("2006-01-02")
+	seen := t.Col("seen") - 1
+	for _, row := range full {
+		if seen < 0 || seen >= len(row) {
+			continue
+		}
+		day, _ := row[seen].(string)
+		// Pipeline has already rendered seen as a day, so a string compare on
+		// ISO dates is the same as a date compare.
+		if day >= cutoff {
+			t.Rows = append(t.Rows, row)
+		}
 	}
 	return t, nil
 }
