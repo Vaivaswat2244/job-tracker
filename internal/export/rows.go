@@ -162,6 +162,37 @@ func NewRoles(conn *sql.DB, now time.Time) (Table, error) {
 	return t, nil
 }
 
+// Targets is the filtered view: engineering-or-unclassified work at a level a
+// final-year student can realistically get.
+//
+// It is a separate tab rather than a filter on Pipeline. Classification is
+// heuristic, so a misread department must cost a role its place on one tab, not
+// its place in the record (INV-1). Pipeline and New (24h) stay complete.
+func Targets(conn *sql.DB) (Table, error) {
+	rows, err := jobs.List(conn, jobs.Filter{EarlyCareer: true})
+	if err != nil {
+		return Table{Name: "Targets", Headers: targetHeaders}, err
+	}
+	t := Table{Name: "Targets", Headers: targetHeaders}
+	for _, r := range rows {
+		seen := r.Seen
+		if d := dates.ParseDay(seen); !d.IsZero() {
+			seen = d.Format("2006-01-02")
+		}
+		t.Rows = append(t.Rows, []any{
+			r.ID, r.Company, r.Title, nullAny(r.Location), seen,
+			nullAny(r.Department), nullAny(r.Level), nullIntAny(r.MinYears),
+			nullIntAny(r.HiresInIndia), nullIntAny(r.AuthRequired), r.URL,
+		})
+	}
+	return t, nil
+}
+
+var targetHeaders = []string{
+	"job_id", "company", "title", "location", "seen",
+	"department", "level", "min_years", "india", "auth_required", "url",
+}
+
 var contactHeaders = []string{
 	"id", "company", "name", "title", "email", "confidence", "linkedin", "source",
 }

@@ -57,12 +57,13 @@ var tableFor = map[string]func(*sql.DB) (export.Table, error){
 	"New (24h)": func(conn *sql.DB) (export.Table, error) {
 		return export.NewRoles(conn, time.Now())
 	},
+	"Targets": export.Targets,
 }
 
 // pushOrder fixes the tab order; map iteration would shuffle it per run.
 // "New (24h)" leads because it is the tab actually read each morning —
 // Pipeline is seven thousand rows of standing inventory behind it.
-var pushOrder = []string{"New (24h)", "Applications", "Pipeline"}
+var pushOrder = []string{"Targets", "New (24h)", "Applications", "Pipeline"}
 
 // sheetIDPattern pulls the id out of a pasted URL like
 // https://docs.google.com/spreadsheets/d/<id>/edit#gid=0

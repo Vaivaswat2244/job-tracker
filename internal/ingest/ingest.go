@@ -161,6 +161,7 @@ UPDATE jobs SET
     location = ?, employment_type = ?, remote = ?,
     pay_min = ?, pay_max = ?, pay_currency = ?,
     comp_model = ?, hires_in_india = ?, auth_required = ?,
+    department = ?, job_function = ?, level = ?, min_years = ?,
     dedupe_key = ?, raw_json = ?
 WHERE id = ?
 `
@@ -168,9 +169,10 @@ WHERE id = ?
 const insertSQL = `
 INSERT INTO jobs (company_id, title, url, source, external_id, posted_at, seen_at,
     first_seen_at, jd_text, location, employment_type, remote, pay_min, pay_max,
-    pay_currency, comp_model, hires_in_india, auth_required, dedupe_key, raw_json,
+    pay_currency, comp_model, hires_in_india, auth_required,
+    department, job_function, level, min_years, dedupe_key, raw_json,
     source_urls)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `
 
 // Upsert inserts or refreshes one posting, returning (jobID, "new"|"updated").
@@ -194,6 +196,29 @@ func Upsert(conn *sql.DB, companyID int64, companyName string, job ats.Normalize
 
 	raw := rawJSON(job.Raw)
 
+	// Classify at ingest, not only in renormalize. A poll runs hourly and
+	// renormalize does not; leaving these NULL on insert meant every new role
+	// arrived unclassified and the targeted views decayed between manual runs.
+	// rawJSON returns any so a missing payload stores SQL NULL; the classifiers
+	// want the text, so unwrap it once here.
+	rawText, _ := raw.(string)
+
+	employment := deref(job.EmploymentType)
+	if employment == "" {
+		employment = normalize.EmploymentType(job.Source, rawText)
+	}
+	dept := normalize.Department(job.Source, rawText)
+	haystack := job.JDText
+	if haystack == "" {
+		haystack = rawText
+	}
+	function := normalize.Function(dept, job.Title)
+	level := normalize.Level(job.Title, employment, haystack)
+	var minYears any
+	if n, ok := normalize.MinYears(haystack); ok {
+		minYears = n
+	}
+
 	var existing int64
 	err := conn.QueryRow(
 		"SELECT id FROM jobs WHERE source = ? AND external_id = ?",
@@ -204,9 +229,11 @@ func Upsert(conn *sql.DB, companyID int64, companyName string, job ats.Normalize
 		if _, err := conn.Exec(updateSQL,
 			companyID, job.Title, job.URL, nilIfEmpty(postedAt), now,
 			job.JDText, job.JDText,
-			ptrArg(job.Location), ptrArg(job.EmploymentType), remote,
+			ptrArg(job.Location), nilIfBlank(employment), remote,
 			ptrArg(job.PayMin), ptrArg(job.PayMax), ptrArg(job.PayCurrency),
-			compModel, india, auth, key, raw, existing,
+			compModel, india, auth,
+			nilIfBlank(dept), function, level, minYears,
+			key, raw, existing,
 		); err != nil {
 			return 0, "", fmt.Errorf("update job %d: %w", existing, err)
 		}
@@ -227,9 +254,11 @@ func Upsert(conn *sql.DB, companyID int64, companyName string, job ats.Normalize
 
 	res, err := conn.Exec(insertSQL,
 		companyID, job.Title, job.URL, job.Source, job.ExternalID, nilIfEmpty(postedAt),
-		now, now, job.JDText, ptrArg(job.Location), ptrArg(job.EmploymentType), remote,
+		now, now, job.JDText, ptrArg(job.Location), nilIfBlank(employment), remote,
 		ptrArg(job.PayMin), ptrArg(job.PayMax), ptrArg(job.PayCurrency),
-		compModel, india, auth, key, raw, sourceURLs,
+		compModel, india, auth,
+		nilIfBlank(dept), function, level, minYears,
+		key, raw, sourceURLs,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf("insert job %s/%s: %w", job.Source, job.ExternalID, err)
@@ -288,19 +317,22 @@ func rawJSON(raw map[string]any) any {
 // refreshes a row the board still lists, so without this an improved rule would
 // never reach the archive. Touches derived columns only.
 func Renormalize(conn *sql.DB) (int, error) {
-	rows, err := conn.Query("SELECT id, jd_text, location, pay_currency FROM jobs")
+	rows, err := conn.Query(
+		"SELECT id, jd_text, location, pay_currency, title, source, raw_json, employment_type FROM jobs")
 	if err != nil {
 		return 0, fmt.Errorf("read jobs for renormalize: %w", err)
 	}
 
 	type record struct {
-		id                            int64
-		jdText, location, payCurrency sql.NullString
+		id                                 int64
+		jdText, location, payCurrency      sql.NullString
+		title, source, rawJSON, employment sql.NullString
 	}
 	var records []record
 	for rows.Next() {
 		var r record
-		if err := rows.Scan(&r.id, &r.jdText, &r.location, &r.payCurrency); err != nil {
+		if err := rows.Scan(&r.id, &r.jdText, &r.location, &r.payCurrency,
+			&r.title, &r.source, &r.rawJSON, &r.employment); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("scan job: %w", err)
 		}
@@ -316,16 +348,55 @@ func Renormalize(conn *sql.DB) (int, error) {
 		if v, ok := normalize.HiresInIndia(r.jdText.String, r.location.String); ok {
 			india = v
 		}
+
+		// Department comes straight from the ATS payload rather than being
+		// guessed from the title: it is present on 99% of postings and is the
+		// only reliable way to tell "Solution Engineering" (pre-sales) from
+		// "Platform Engineering".
+		dept := normalize.Department(r.source.String, r.rawJSON.String)
+		employment := r.employment.String
+		if employment == "" {
+			employment = normalize.EmploymentType(r.source.String, r.rawJSON.String)
+		}
+
+		// Seniority reads the description as well as the title, because a role
+		// open to a fresher often says so only in the requirements.
+		haystack := r.jdText.String
+		if haystack == "" {
+			haystack = r.rawJSON.String
+		}
+		var minYears any
+		if n, ok := normalize.MinYears(haystack); ok {
+			minYears = n
+		}
+
 		if _, err := conn.Exec(
-			"UPDATE jobs SET comp_model = ?, auth_required = ?, hires_in_india = ? WHERE id = ?",
+			"UPDATE jobs SET comp_model = ?, auth_required = ?, hires_in_india = ?,"+
+				" department = ?, job_function = ?, level = ?, min_years = ?,"+
+				" employment_type = COALESCE(NULLIF(employment_type,''), ?) WHERE id = ?",
 			normalize.CompModel(r.jdText.String, r.payCurrency.String),
 			normalize.AuthRequired(r.jdText.String),
-			india, r.id,
+			india,
+			nilIfBlank(dept),
+			normalize.Function(dept, r.title.String),
+			normalize.Level(r.title.String, employment, haystack),
+			minYears,
+			nilIfBlank(employment),
+			r.id,
 		); err != nil {
 			return 0, fmt.Errorf("renormalize job %d: %w", r.id, err)
 		}
 	}
 	return len(records), nil
+}
+
+// nilIfBlank writes SQL NULL rather than an empty string, so "we looked and
+// found nothing" and "we never looked" stay distinguishable.
+func nilIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Stats is the per-board ingest tally.

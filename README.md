@@ -356,6 +356,43 @@ tracker sheet push         # Applications tab, now populated
 The `tracker-mail` timer runs every two hours at :15; the 08:15 run lands before
 the 09:30 follow-up check so overnight replies stop the ladder in time.
 
+## Targeting: department and level
+
+Every posting is classified on two axes, both derived at ingest and re-derivable with
+`renormalize`:
+
+| column | source | coverage |
+|---|---|---|
+| `department` | the ATS payload, verbatim | 99% |
+| `job_function` | engineering / other / unknown, from department + title | — |
+| `level` | intern / junior / mid / senior / unknown | — |
+| `min_years` | lowest years-of-experience the posting asks for | 58% |
+
+```bash
+./tracker.sh jobs --early --india      # engineering-ish, intern/junior, India
+./tracker.sh jobs --level intern
+./tracker.sh jobs --function engineering --level junior
+```
+
+**Department comes from the ATS, not from the title.** Greenhouse sends `departments`,
+Lever `categories.team`, Ashby `department` — on 99% of postings. It is far better
+evidence than the title: "Solution Engineering" and "Sales Engineering" both contain
+"engineering" and are pre-sales roles, while "MFC Hourly" and "Key Holders" are retail.
+
+**Level needs three signals because none works alone.** `employment_type` is exact but set
+on a handful of postings; titles miss roles open to juniors that never say so; and years
+of experience alone reads "Senior Engineer, 2+ years" as junior. So: the ATS type wins
+when present, an explicit senior title vetoes, a numeric suffix (`Engineer II`) is
+reconciled against the stated years, and experience is the fallback that supplies recall.
+
+**Unknown counts as reachable.** A department the rules cannot read, or a posting stating
+no level, still appears under `--early`. Hiding a role because the classifier failed is
+how a gap in the rules silently costs an opportunity (INV-1).
+
+The **Targets** tab applies this filter; **Pipeline** and **New (24h)** stay complete. A
+misclassification therefore costs a role its place on one tab, never its place in the
+record.
+
 ## Invariants this code enforces
 
 **INV-1 — never silently lose an opportunity.** Ingest is append-only. `add-job` always

@@ -20,6 +20,10 @@ func jobsCmd(conn *sql.DB, args []string) int {
 	since := fs.String("since", "", "lookback: 7d, 48h, 2w, or 2026-08-01")
 	limit := fs.Int("limit", 50, "max rows (0 for all)")
 	dupes := fs.Bool("dupes", false, "include rows linked to a canonical duplicate")
+	early := fs.Bool("early", false,
+		"engineering (or unclassified) work at intern/junior level — the target filter")
+	function := fs.String("function", "", "engineering | other | unknown")
+	level := fs.String("level", "", "intern | junior | mid | senior | unknown")
 	urls := fs.Bool("urls", false, "print the apply URL under each row")
 	if _, ok := parse(fs, args); !ok {
 		return 2
@@ -33,6 +37,7 @@ func jobsCmd(conn *sql.DB, args []string) int {
 	filter := jobs.Filter{
 		Company: *company, Title: *title, IndiaOnly: *india, RemoteOnly: *remote,
 		Since: cutoff, IncludeDuplicates: *dupes, Limit: *limit,
+		EarlyCareer: *early, Function: *function, Level: *level,
 	}
 	rows, err := jobs.List(conn, filter)
 	if err != nil {

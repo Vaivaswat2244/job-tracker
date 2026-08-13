@@ -238,6 +238,10 @@ var addedColumns = []struct {
 		{"remote", "INTEGER"},
 		{"raw_json", "TEXT"},
 		{"dedupe_key", "TEXT"}, // normalized company|title|posted_week
+		{"department", "TEXT"}, // owning team, straight from the ATS payload
+		{"job_function", "TEXT"}, // engineering | other | unknown, derived from department
+		{"level", "TEXT"},      // intern | junior | mid | senior | unknown
+		{"min_years", "INTEGER"}, // lowest years of experience the posting asks for
 	}},
 }
 
@@ -283,4 +287,5 @@ var postIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_companies_domain ON companies(lower(domain))",
 	"CREATE INDEX IF NOT EXISTS idx_mail_review ON mail_messages(needs_review, received_at)",
 	"CREATE INDEX IF NOT EXISTS idx_mail_thread ON mail_messages(thread_id)",
+	"CREATE INDEX IF NOT EXISTS idx_jobs_targeting ON jobs(job_function, level)",
 }

@@ -273,7 +273,7 @@ func TestPushCreatesTabsAndWritesRaw(t *testing.T) {
 // The formula-injection guard is about the payload as much as the option: the
 // title must travel as its literal text.
 func TestPushSendsSuspiciousTitleAsLiteralText(t *testing.T) {
-	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)"})
+	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)", "Targets"})
 	defer srv.Close()
 
 	pushAgainst(t, srv, seed(t))
@@ -285,7 +285,7 @@ func TestPushSendsSuspiciousTitleAsLiteralText(t *testing.T) {
 // A second push must not restack the conditional-format rules it added on the
 // first, or the sheet accumulates a duplicate rule per day.
 func TestSecondPushReplacesConditionalFormats(t *testing.T) {
-	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)"})
+	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)", "Targets"})
 	defer srv.Close()
 
 	pushAgainst(t, srv, seed(t))
@@ -315,7 +315,7 @@ func TestPushGrowsTheGridForALargePipeline(t *testing.T) {
 			t.Fatalf("seed filler %d: %v", i, err)
 		}
 	}
-	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)"})
+	srv, s := newStub([]string{"Pipeline", "Applications", "New (24h)", "Targets"})
 	defer srv.Close()
 
 	pushAgainst(t, srv, conn)

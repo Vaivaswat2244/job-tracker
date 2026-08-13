@@ -26,6 +26,10 @@ type Row struct {
 	PayCurrency  sql.NullString
 	AuthRequired sql.NullInt64
 	HiresInIndia sql.NullInt64
+	Department   sql.NullString
+	Function     sql.NullString
+	Level        sql.NullString
+	MinYears     sql.NullInt64
 	Seen         string // first_seen_at, or seen_at for hand-added rows
 }
 
@@ -39,6 +43,13 @@ type Filter struct {
 	Since             time.Time // zero means no lower bound
 	IncludeDuplicates bool      // canonical_id rows are hidden by default
 	Limit             int       // 0 means no limit
+
+	// Targeting. Function and Level match exactly; EarlyCareer is the useful
+	// compound: engineering-or-unclassified work at a level a final-year
+	// student can actually get.
+	Function    string
+	Level       string
+	EarlyCareer bool
 }
 
 // selectClause coalesces first_seen_at with seen_at so hand-added jobs, which
@@ -46,6 +57,7 @@ type Filter struct {
 const selectClause = `
 SELECT j.id, c.name, j.title, j.location, j.url, j.source, j.comp_model,
        j.pay_min, j.pay_max, j.pay_currency, j.auth_required, j.hires_in_india,
+       j.department, j.job_function, j.level, j.min_years,
        COALESCE(j.first_seen_at, j.seen_at) AS seen
 FROM jobs j
 JOIN companies c ON c.id = j.company_id`
@@ -86,6 +98,22 @@ func (f Filter) SQL() (string, []any) {
 	if f.RemoteOnly {
 		where = append(where, "j.remote = 1")
 	}
+	if f.Function != "" {
+		where = append(where, "j.job_function = ?")
+		args = append(args, f.Function)
+	}
+	if f.Level != "" {
+		where = append(where, "j.level = ?")
+		args = append(args, f.Level)
+	}
+	if f.EarlyCareer {
+		// Unclassified counts as reachable on both axes. A department the rules
+		// could not read, or a posting that states no level, is one to look at —
+		// hiding it would lose an opportunity to a gap in the rules (INV-1).
+		where = append(where,
+			"COALESCE(j.job_function,'unknown') IN ('engineering','unknown')",
+			"COALESCE(j.level,'unknown') IN ('intern','junior','unknown')")
+	}
 	if !f.Since.IsZero() {
 		where = append(where, "COALESCE(j.first_seen_at, j.seen_at) >= ?")
 		args = append(args, f.Since.UTC().Format("2006-01-02T15:04:05-07:00"))
@@ -116,7 +144,8 @@ func List(conn *sql.DB, f Filter) ([]Row, error) {
 		var r Row
 		if err := rows.Scan(&r.ID, &r.Company, &r.Title, &r.Location, &r.URL,
 			&r.Source, &r.CompModel, &r.PayMin, &r.PayMax, &r.PayCurrency,
-			&r.AuthRequired, &r.HiresInIndia, &r.Seen); err != nil {
+			&r.AuthRequired, &r.HiresInIndia, &r.Department, &r.Function,
+			&r.Level, &r.MinYears, &r.Seen); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		out = append(out, r)
@@ -149,6 +178,9 @@ func (r Row) Flags() string {
 	}
 	if r.AuthRequired.Valid && r.AuthRequired.Int64 == 1 {
 		out = append(out, "AUTH")
+	}
+	if r.Level.Valid && r.Level.String != "" && r.Level.String != "unknown" {
+		out = append(out, r.Level.String)
 	}
 	if r.CompModel.Valid && r.CompModel.String != "" && r.CompModel.String != "unknown" {
 		out = append(out, r.CompModel.String)
