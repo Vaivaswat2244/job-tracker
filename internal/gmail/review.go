@@ -3,6 +3,7 @@ package gmail
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Vaivaswat2244/job-tracker/internal/dates"
@@ -47,6 +48,50 @@ func PendingList(conn *sql.DB) ([]Pending, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// RecordNew creates the company and job a queued message refers to, then
+// applies it. Most application mail is from companies the watchlist does not
+// track — 26 of the first 86 queued messages — and requiring an existing job id
+// left those impossible to record at all. The application is the thing worth
+// keeping; the job row exists to hang it on.
+func RecordNew(conn *sql.DB, gmailID, company, title string, now time.Time) (Action, error) {
+	if strings.TrimSpace(company) == "" {
+		return ActionNone, fmt.Errorf("a company name is required")
+	}
+	if strings.TrimSpace(title) == "" {
+		title = "(role not stated in the email)"
+	}
+
+	var companyID int64
+	err := conn.QueryRow("SELECT id FROM companies WHERE lower(name) = ?",
+		strings.ToLower(company)).Scan(&companyID)
+	if err == sql.ErrNoRows {
+		res, err := conn.Exec(
+			"INSERT INTO companies (name, discovery_source) VALUES (?, 'mail')", company)
+		if err != nil {
+			return ActionNone, fmt.Errorf("create company %q: %w", company, err)
+		}
+		if companyID, err = res.LastInsertId(); err != nil {
+			return ActionNone, err
+		}
+	} else if err != nil {
+		return ActionNone, fmt.Errorf("look up company: %w", err)
+	}
+
+	stamp := now.UTC().Format(db.ISO8601)
+	res, err := conn.Exec(
+		"INSERT INTO jobs (company_id, title, url, source, seen_at, first_seen_at)"+
+			" VALUES (?,?,?, 'mail', ?, ?)",
+		companyID, title, "mail:"+gmailID, stamp, stamp)
+	if err != nil {
+		return ActionNone, fmt.Errorf("create job: %w", err)
+	}
+	jobID, err := res.LastInsertId()
+	if err != nil {
+		return ActionNone, err
+	}
+	return Resolve(conn, gmailID, jobID, now)
 }
 
 // Resolve applies a queued message to a job the user names, doing what the

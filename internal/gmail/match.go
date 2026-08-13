@@ -25,6 +25,11 @@ func (m Match) Confident() bool { return m.Reason == "" }
 // employer, so for those the company has to come out of the subject line.
 func ResolveCompany(conn *sql.DB, m Message) (sql.NullInt64, string, string) {
 	guess := CompanyFromSubject(m.Subject)
+	if guess == "" {
+		// Many ATS vendors encode the employer in the sender rather than the
+		// subject: salesforce@myworkday.com, careers@gonoise.freshteam.com.
+		guess = CompanyFromSender(m.From)
+	}
 
 	if !IsATS(m.From) {
 		if domain := Domain(m.From); domain != "" {
@@ -39,7 +44,7 @@ func ResolveCompany(conn *sql.DB, m Message) (sql.NullInt64, string, string) {
 	}
 
 	if guess == "" {
-		return sql.NullInt64{}, "", "no company in the subject and the sender is a recruiting platform"
+		return sql.NullInt64{}, "", "could not tell which company this is from the subject or sender"
 	}
 
 	rows, err := conn.Query(

@@ -84,12 +84,75 @@ var automatedLocalParts = []string{
 
 // subjectCompany pulls the employer out of the phrasings ATS mail actually uses.
 // Ordered most specific first; the first match wins.
+// end is what terminates a company name in a subject. "!" and "/" matter more
+// than they look: "Thanks for applying to Stripe!" and "... to Salesforce /
+// Summer 2026 Intern" were both being missed for want of them.
+const end = `(?:\s*[-–—|,:;!.?/(\[]|$)`
+
 var subjectCompany = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)your application (?:to|at|for) ([A-Z0-9][\w&.' -]{1,40}?)(?:\s*[-–—|,:(]|$)`),
-	regexp.MustCompile(`(?i)thank(?:s| you) for (?:applying|your interest) (?:to|at|in) ([A-Z0-9][\w&.' -]{1,40}?)(?:\s*[-–—|,:(]|$)`),
-	regexp.MustCompile(`(?i)applying (?:to|at) ([A-Z0-9][\w&.' -]{1,40}?)(?:\s*[-–—|,:(]|$)`),
-	regexp.MustCompile(`(?i)application (?:to|at|for) ([A-Z0-9][\w&.' -]{1,40}?)(?:\s*[-–—|,:(]|$)`),
+	regexp.MustCompile(`(?i)your application (?:to|at|for|with) ([A-Z0-9][\w&.' -]{1,40}?)` + end),
+	regexp.MustCompile(`(?i)thank(?:s| you) for (?:applying|your application|your interest) (?:to|at|in|with) ([A-Z0-9][\w&.' -]{1,40}?)` + end),
+	regexp.MustCompile(`(?i)applying (?:to|at|with) ([A-Z0-9][\w&.' -]{1,40}?)` + end),
+	regexp.MustCompile(`(?i)application (?:to|at|for|with) ([A-Z0-9][\w&.' -]{1,40}?)` + end),
+	// "Visa has received your application", "Acme has reviewed your application"
+	regexp.MustCompile(`(?i)^([A-Z0-9][\w&.' -]{1,40}?)\s+has\s+(?:received|reviewed)\b`),
+	// "Update from Notion"
+	regexp.MustCompile(`(?i)\bupdate from ([A-Z0-9][\w&.' -]{1,40}?)` + end),
+	// Company-first: "Cloudflare Application Update | ...", "Acme – New Job
+	// Application Received", "Acme Recruiting | Application Received"
+	regexp.MustCompile(`(?i)^([A-Z0-9][\w&.' -]{1,40}?)\s+(?:recruiting|careers|talent)?\s*[|–—-]?\s*(?:new\s+job\s+)?application\b`),
 	regexp.MustCompile(`(?i)^([A-Z0-9][\w&.' -]{1,40}?)\s*[-–—|:]\s*(?:application|thank)`),
+	// "...Intern at AppXcelerate Solutions Pvt Ltd"
+	regexp.MustCompile(`(?i)\bat ([A-Z0-9][\w&.' -]{1,40}?)` + end + `\s*$`),
+}
+
+// atsLocalPart pulls the employer out of the sender when the ATS encodes it
+// there: salesforce@myworkday.com, docusign+autoreply@talent.icims.com,
+// careers@gonoise.freshteam.com. This is a strong signal the subject often
+// lacks, and it was being thrown away because the domain reads as an ATS.
+func CompanyFromSender(from string) string {
+	addr := strings.ToLower(Address(from))
+	local, domain, ok := strings.Cut(addr, "@")
+	if !ok {
+		return ""
+	}
+	// A vendor subdomain: <company>.freshteam.com, <company>.recruitee.com
+	if parts := strings.Split(domain, "."); len(parts) > 2 {
+		head := parts[0]
+		if !genericSender[head] {
+			return cleanCompany(head)
+		}
+	}
+	// A per-company local part, ignoring +tags and generic mailbox names.
+	local, _, _ = strings.Cut(local, "+")
+	local = strings.Trim(local, ".-_")
+	if local == "" || genericSender[local] {
+		return ""
+	}
+	if strings.ContainsAny(local, ".-_") {
+		// "no-reply", "jobs-noreply" and friends: too generic to be a company.
+		for _, piece := range strings.FieldsFunc(local, func(r rune) bool {
+			return r == '.' || r == '-' || r == '_'
+		}) {
+			if genericSender[piece] {
+				return ""
+			}
+		}
+	}
+	return cleanCompany(local)
+}
+
+// genericSender are mailbox and subdomain names that identify a function, not
+// an employer.
+var genericSender = map[string]bool{
+	"no": true, "reply": true, "noreply": true, "no-reply": true, "donotreply": true,
+	"do": true, "not": true, "mail": true, "mailer": true, "notification": true,
+	"notifications": true, "jobs": true, "job": true, "careers": true, "career": true,
+	"recruiting": true, "recruitment": true, "recruit": true, "talent": true, "hr": true,
+	"hello": true, "info": true, "support": true, "help": true, "team": true,
+	"apply": true, "application": true, "applications": true, "us": true, "eu": true,
+	"www": true, "email": true, "smtp": true, "bounce": true, "auto": true,
+	"autoreply": true, "hire": true, "boards": true, "my": true, "app": true,
 }
 
 // Classify decides what a message is. It never reads state, so it can be

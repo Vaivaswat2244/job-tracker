@@ -36,7 +36,7 @@ or deletes anything.
 
 func mailCmd(conn *sql.DB, args []string) int {
 	if len(args) == 0 {
-		return fail("usage: tracker mail <auth|poll|list|apply|dismiss|accounts|setup>")
+		return fail("usage: tracker mail <auth|poll|list|apply|new|dismiss|accounts|setup>")
 	}
 	switch args[0] {
 	case "auth":
@@ -47,6 +47,8 @@ func mailCmd(conn *sql.DB, args []string) int {
 		return mailList(conn, args[1:])
 	case "apply":
 		return mailApply(conn, args[1:], false)
+	case "new":
+		return mailNew(conn, args[1:])
 	case "dismiss":
 		return mailApply(conn, args[1:], true)
 	case "accounts":
@@ -56,7 +58,7 @@ func mailCmd(conn *sql.DB, args []string) int {
 		return 0
 	default:
 		return fail("unknown mail subcommand %q "+
-			"(auth, poll, list, apply, dismiss, accounts, setup)", args[0])
+			"(auth, poll, list, apply, new, dismiss, accounts, setup)", args[0])
 	}
 }
 
@@ -230,6 +232,39 @@ func orDash(s string) string {
 	return s
 }
 
+// mailNew records an application to a company the pipeline never polled, which
+// is most of them.
+func mailNew(conn *sql.DB, args []string) int {
+	fs := newFlags("mail new")
+	company := fs.String("company", "", "company name (default: what the email said)")
+	title := fs.String("title", "", "role title")
+	pos, ok := parse(fs, args)
+	if !ok {
+		return 2
+	}
+	if len(pos) != 1 {
+		return fail("usage: tracker mail new <gmail_id> [--company X] [--title Y]")
+	}
+
+	name := *company
+	if name == "" {
+		// Default to whatever the message claimed, so the common case is just
+		// `mail new <id>`.
+		if err := conn.QueryRow(
+			"SELECT company_guess FROM mail_messages WHERE gmail_id = ?",
+			pos[0]).Scan(&name); err != nil || name == "" {
+			return fail("no company on that message — pass --company")
+		}
+	}
+
+	action, err := gmail.RecordNew(conn, pos[0], name, *title, time.Now().UTC())
+	if err != nil {
+		return fail("%v", err)
+	}
+	fmt.Fprintf(stdout, "%s -> %s: %s\n", pos[0], name, action)
+	return 0
+}
+
 func mailList(conn *sql.DB, args []string) int {
 	fs := newFlags("mail list")
 	if _, ok := parse(fs, args); !ok {
@@ -265,8 +300,10 @@ func mailList(conn *sql.DB, args []string) int {
 		}
 		fmt.Fprintln(stdout)
 	}
-	fmt.Fprintf(stdout, "%d waiting. `tracker mail apply <gmail_id> <job_id>` or "+
-		"`tracker mail dismiss <gmail_id>`.\n", len(pending))
+	fmt.Fprintf(stdout, "%d waiting.\n"+
+		"  tracker mail apply <gmail_id> <job_id>   # a role already in the pipeline\n"+
+		"  tracker mail new   <gmail_id> [--title]  # a company we never polled\n"+
+		"  tracker mail dismiss <gmail_id>          # not an application\n", len(pending))
 	return 0
 }
 
