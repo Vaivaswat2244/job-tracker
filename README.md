@@ -24,9 +24,10 @@ make test                     # go test ./...
 ```
 
 Six user timers are installed: hourly `poll`, twice-daily `funding poll`, the 09:00
-`digest`, the 09:30 follow-up check, the 09:05 Google Sheet push, and the two-hourly
-Gmail read. Each fires under `Persistent=true`, so a run missed while the laptop was asleep happens on wake rather than
-being skipped.
+`digest`, the 09:30 follow-up check, the Google Sheet push at 09:05/14:05/20:05, and the
+two-hourly Gmail read. Each fires under `Persistent=true`, so a run missed while the laptop
+was asleep happens on wake rather than being skipped — and the network-dependent ones wait
+for DNS and retry, because a catch-up firing at boot otherwise races resolv.conf.
 
 The hourly poll timer is a *check*, not a poll: a company is only fetched once its cadence
 has elapsed — 3h at `high` priority, 6h at `normal` — so a `normal` company is polled about
@@ -57,7 +58,7 @@ directory; `bin/tracker` directly is the same thing once built.
 ./tracker.sh sheet push                 # -> the shared Google Sheet
 ./tracker.sh mail poll                  # read Gmail for confirmations/rejections
 ./tracker.sh mail list                  # mail the ingest could not place
-./tracker.sh mail accounts               # which mailboxes are connected
+./tracker.sh mail accounts              # which mailboxes are connected
 ```
 
 `add-job` flags: `--company`, `--title`, `--source`, `--notes`, `--no-fetch`.
