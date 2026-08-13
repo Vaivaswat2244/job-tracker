@@ -3,7 +3,16 @@ Description=Read Gmail for application confirmations, rejections and replies
 After=network-online.target
 Wants=network-online.target
 
+StartLimitIntervalSec=3600
+StartLimitBurst=6
+
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Documents/projects/Tracker
 ExecStart=%h/Documents/projects/Tracker/bin/tracker mail poll
+
+# A catch-up run fires the moment the laptop wakes, which races DNS coming back:
+# network-online.target was already satisfied before the suspend, so it does not
+# gate this. Without a retry the run just fails and the next one is a day away.
+Restart=on-failure
+RestartSec=90
